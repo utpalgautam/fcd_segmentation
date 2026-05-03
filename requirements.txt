@@ -1,0 +1,38 @@
+# FCD Segmentation Pipeline — Python Dependencies
+# Install via: pip install -r requirements.txt
+# Or use setup.sh for full conda environment setup
+
+# ── Core deep learning ────────────────────────────────────────
+torch>=2.1.0
+torchvision>=0.16.0
+
+# ── nnU-Net v2 (core framework) ───────────────────────────────
+nnunetv2>=2.2.1
+
+# ── Medical imaging ──────────────────────────────────────────
+nibabel>=5.1.0
+SimpleITK>=2.3.0
+nilearn>=0.10.0
+antspyx>=0.4.0
+
+# ── Skull stripping ──────────────────────────────────────────
+# HD-BET installed separately (see setup.sh)
+# git+https://github.com/MIC-DKFZ/HD-BET.git
+
+# ── Scientific computing ─────────────────────────────────────
+numpy>=1.24.0
+scipy>=1.11.0
+scikit-learn>=1.3.0
+pandas>=2.0.0
+
+# ── Dataset download ─────────────────────────────────────────
+openneuro-py>=2023.11.0
+
+# ── Visualization ────────────────────────────────────────────
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# ── Utilities ────────────────────────────────────────────────
+tqdm>=4.65.0
+PyYAML>=6.0
+pathlib2>=2.3.7

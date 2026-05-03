@@ -1,0 +1,69 @@
+# =============================================================================
+# config.yaml — FCD Segmentation Pipeline Configuration
+# Based on Joshi et al., Frontiers in Artificial Intelligence, 2025
+# doi: 10.3389/frai.2025.1601815
+#
+# Edit this file to control all pipeline settings.
+# =============================================================================
+
+# ── Dataset ──────────────────────────────────────────────────
+dataset:
+  openneuro_id: "ds004199"
+  base_dir: "outputs/dataset"           # where raw dataset is downloaded
+  work_dir: "outputs/work"              # all intermediate/output files
+
+# ── Subset mode ───────────────────────────────────────────────
+# true  → quick test with N patients (~1–2 hrs)
+# false → full 85 FCD + 85 controls training (matches paper results)
+use_subset: false
+subset_n_patients: 10
+
+# ── nnU-Net task settings ─────────────────────────────────────
+nnunet:
+  task_id: 501
+  task_name: "Dataset501_FCD"
+  # Paper trainer: 100 epochs + SGD momentum=0.99, LR=0.01
+  trainer: "nnUNetTrainer_100epochs"
+  plans: "nnUNetPlans"
+  config: "3d_fullres"          # paper: 3d_fullres
+  n_folds: 5                    # paper: 5-fold cross-validation
+
+# ── Preprocessing ─────────────────────────────────────────────
+# Matches paper Section 3.2–3.3
+preprocessing:
+  target_spacing: [1.0, 1.0, 1.0]   # mm isotropic resampling
+  top_k_slices: 5                    # top-5 FLAIR slices (paper's key novelty)
+  use_skull_strip: true              # false = use Otsu threshold fallback
+  # Input: FLAIR only (single channel — paper does NOT use T1 as model input)
+  use_t1_as_input: false
+
+# ── Training ──────────────────────────────────────────────────
+# Matches paper Section 3.3
+training:
+  epochs: 100          # paper: 100 epochs (nnU-Net default is 1000)
+  batch_size: 4        # paper default nnU-Net batch size
+  learning_rate: 0.01  # paper: LR=0.01
+  momentum: 0.99       # paper: SGD momentum=0.99, Nesterov
+  optimizer: "sgd"     # paper: SGD with Nesterov acceleration
+  device: "cuda"       # "cuda" or "cpu"
+
+# ── MC-Dropout inference ──────────────────────────────────────
+# Used for uncertainty estimation post-training
+mc_dropout:
+  n_samples: 20            # T stochastic forward passes
+  dropout_p: 0.2           # dropout probability during inference
+  confidence_thresh: 0.5   # voxels kept if mean_prob > this
+  uncertainty_thresh: 0.3  # voxels removed if entropy > this
+
+# ── Evaluation ────────────────────────────────────────────────
+# Paper reports Mean PDS=0.37±0.07, Best PDS=0.52 (Fold 5)
+evaluation:
+  ci_level: 0.95          # 95% confidence interval
+  random_seed: 42
+  val_split: 0.2          # 80/20 train/val split (per fold)
+
+# ── Output ────────────────────────────────────────────────────
+output:
+  figures_dir: "outputs/figures"
+  figure_dpi: 150
+  save_probabilities: true   # save soft predictions from nnU-Net

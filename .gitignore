@@ -1,0 +1,8 @@
+venv/
+venv_download/
+outputs/
+*.pdf
+__pycache__/
+*.pyc
+.DS_Store
+.env
