@@ -1,17 +1,8 @@
 """
 evaluate.py — Evaluation, statistical analysis, and comparison table.
 
-Exactly replicates Table 1 and Table 2 from Joshi et al. (2025):
-  - Table 1: Per-fold PDS (mean PDS per epoch and final PDS per fold)
-  - Table 2: Method comparison with published approaches
-
-Paper results (Table 1):
-  Fold 1: mean=0.42, final=0.42
-  Fold 2: mean=0.29, final=0.40
-  Fold 3: mean=0.33, final=0.47
-  Fold 4: mean=0.35, final=0.42
-  Fold 5: mean=0.47, final=0.52
-  Overall: mean PDS = 0.37 ± 0.07
+Reads per-fold Pseudo-Dice values directly from the nnU-Net training logs
+(training_log_*.txt) so all reported numbers come from the actual model.
 
 Includes 95% CI, paired t-test, and per-fold PDS summary.
 """
@@ -21,7 +12,7 @@ import pandas as pd
 import nibabel as nib
 import logging
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from scipy.stats import t as t_dist, ttest_rel
 
 from src.utils import dice_score, pseudo_dice_score
@@ -151,8 +142,6 @@ def print_summary(stats: dict) -> None:
     print(f"  Mean DSC       : {stats.get('mean_dice', 0):.4f}")
     ci_lvl = int(stats.get("ci_level", 0.95) * 100)
     print(f"  {ci_lvl}% CI for PDS : ({stats.get('ci_lower', 0):.4f}, {stats.get('ci_upper', 0):.4f})")
-    print(f"\n  Paper reference (Joshi et al., 2025):")
-    print(f"    Mean PDS = 0.37 ± 0.07   Best PDS = 0.52 (Fold 5)")
     print(f"{'='*55}\n")
 
 
@@ -204,18 +193,20 @@ def comparison_table(n_cases: int, mean_pds: float, best_pds: float) -> pd.DataF
 
 
 # ─────────────────────────────────────────────────────────────
-# 5.  Fold-wise statistical analysis — Table 1 from the paper
+# 5.  Fold-wise statistical analysis from REAL training logs
 # ─────────────────────────────────────────────────────────────
 
-# Paper Table 1 exact values (Joshi et al., 2025)
-PAPER_TABLE_1 = {
-    # fold → (mean PDS across epochs, final epoch PDS)
-    1: (0.42, 0.42),
-    2: (0.29, 0.40),
-    3: (0.33, 0.47),
-    4: (0.35, 0.42),
-    5: (0.47, 0.52),
-}
+def _find_training_log(fold_dir: Path) -> Optional[Path]:
+    """
+    nnU-Net saves logs as training_log_YYYY_M_D_HH_MM_SS.txt (timestamped).
+    Return the most recent one found, or None.
+    """
+    logs = sorted(fold_dir.glob("training_log_*.txt"))
+    if logs:
+        return logs[-1]  # take the latest (in case of resumed training)
+    # Final fallback: plain training_log.txt
+    plain = fold_dir / "training_log.txt"
+    return plain if plain.exists() else None
 
 
 def fold_statistics(
@@ -225,64 +216,84 @@ def fold_statistics(
     plans: str,
     config: str,
     n_folds: int,
-    fallback_mean_pds: float = 0.37,
-    fallback_best_pds: float = 0.52,
+    fallback_mean_pds: float = None,
+    fallback_best_pds: float = None,
 ) -> pd.DataFrame:
     """
     Parse nnU-Net training logs to extract per-fold mean and final PDS.
-    Falls back to paper's Table 1 values if logs cannot be parsed.
+    ALL values come from the actual trained model logs — no hardcoded paper
+    numbers are ever substituted.  If a log is missing the fold is skipped
+    and a clear warning is printed.
+
     Returns a DataFrame with columns: fold, mean_pds, final_pds.
     """
     fold_mean_pds:  List[float] = []
     fold_final_pds: List[float] = []
+    folds_used:     List[int]   = []
 
     for fold in range(n_folds):
-        log_dir  = (
+        fold_dir = (
             results_dir
             / f"Dataset{task_id:03d}_FCD"
             / f"{trainer}__{plans}__{config}"
             / f"fold_{fold}"
         )
-        log_file = log_dir / "training_log.txt"
+        log_file = _find_training_log(fold_dir)
 
         pseudo_vals: List[float] = []
 
-        if log_file.exists():
-            with open(log_file) as f:
-                for line in f:
+        if log_file is not None:
+            with open(log_file) as fh:
+                for line in fh:
+                    # nnU-Net v2 log line format:
+                    #   2026-05-03 20:31:47.211991: Pseudo dice [np.float32(0.1425)]
                     lower = line.lower()
-                    if "pseudo dice" in lower or "ema_fg_dice" in lower:
+                    if "pseudo dice" in lower:
                         try:
-                            val = float(line.strip().split()[-1])
-                            pseudo_vals.append(val)
-                        except ValueError:
+                            # Extract the number inside [ ... ]
+                            inside = line.split("[")[-1].split("]")[0]
+                            # Handles both plain floats and np.float32(x)
+                            val_str = inside.split("(")[-1].rstrip(")")
+                            pseudo_vals.append(float(val_str))
+                        except (ValueError, IndexError):
                             pass
+        else:
+            logger.warning("Fold %d: no training log found in %s — fold skipped", fold + 1, fold_dir)
 
         if pseudo_vals:
             fold_mean_pds.append(float(np.mean(pseudo_vals)))
             fold_final_pds.append(float(pseudo_vals[-1]))
-        else:
-            # Fallback: use paper's Table 1 values (1-indexed fold number)
-            paper_vals = PAPER_TABLE_1.get(fold + 1, (fallback_mean_pds, fallback_best_pds))
-            fold_mean_pds.append(paper_vals[0])
-            fold_final_pds.append(paper_vals[1])
-            logger.info("Fold %d: using paper Table 1 values (log not found)", fold + 1)
+            folds_used.append(fold + 1)
+            logger.info(
+                "Fold %d: %d epochs parsed | mean PDS=%.4f | final PDS=%.4f",
+                fold + 1, len(pseudo_vals), fold_mean_pds[-1], fold_final_pds[-1]
+            )
+        elif log_file is not None:
+            logger.warning(
+                "Fold %d: log found but no 'Pseudo dice' entries — check log format: %s",
+                fold + 1, log_file
+            )
+
+    if not fold_mean_pds:
+        raise RuntimeError(
+            "No training logs found for any fold.  "
+            f"Expected logs in: {results_dir}/.../fold_N/training_log_*.txt"
+        )
 
     df = pd.DataFrame({
-        "fold":      list(range(1, n_folds + 1)),
+        "fold":      folds_used,
         "mean_pds":  fold_mean_pds,
         "final_pds": fold_final_pds,
     })
 
-    # Paired t-test: mean vs final PDS (paper reports this comparison)
+    # Paired t-test: mean vs final PDS across folds
     if len(fold_mean_pds) >= 2:
         t_stat, p_val = ttest_rel(fold_mean_pds, fold_final_pds)
-        print(f"\nPaired t-test (mean PDS vs final-epoch PDS across folds):")
+        print(f"\nPaired t-test (mean PDS per epoch vs final-epoch PDS across folds):")
         print(f"  t = {t_stat:.4f}   p = {p_val:.4f}")
         if p_val < 0.05:
-            print("  → Statistically significant improvement (p < 0.05) ✅")
-            print("    (Matches paper: training beyond epoch 50 significantly improves PDS)")
+            print("  → Statistically significant: final epoch PDS > mean epoch PDS (p < 0.05) ✅")
         else:
-            print("  → Not significant at α = 0.05")
+            print("  → Not statistically significant at α = 0.05")
 
     return df
